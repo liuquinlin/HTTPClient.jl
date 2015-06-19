@@ -868,7 +868,7 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
       if (nb2 > nb1) # had stuff to read
         data = ctxt.stream.buff.data
         last = (bytesLeft < length(data)) ? bytesLeft : length(data)
-        bytes = [bytes, data[1:last]]
+        bytes = [bytes; data[1:last]] # concat
         ctxt.stream.buff.data = data[(last+1):end] # remove the bytes we've read from the buffer
         startTime = time() # reset our timer
         bytesLeft -= last  # bytes left to read
@@ -908,7 +908,7 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
           throw("oh no too many errors occured ($(ctxt.stream.errs))")
         end
         println("uh oh, an error occured")
-        return [bytes, exec_as_stream(ctxt, bytesLeft)]
+        return [bytes; exec_as_stream(ctxt, bytesLeft)]
       end
     elseif (timeLeft <= 0 && bytesLeft > 0) # timed out
       ctxt.stream.bytesRead += length(bytes)
@@ -917,7 +917,7 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
       if (ctxt.stream.errs > ctxt.options.max_errs)
         throw("oh no too many errors occured ($(ctxt.stream.errs))")
       end
-      return [bytes, exec_as_stream(ctxt, bytesLeft)]
+      return [bytes; exec_as_stream(ctxt, bytesLeft)]
     end
   end # if (bytesLeft > 0)
 
