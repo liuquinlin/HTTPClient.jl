@@ -682,7 +682,7 @@ urlencode(s::SubString) = urlencode(bytestring(s))
 
 export urlencode
 
-const DEFAULT_TIME_OUT = 180 # default timeout value at 2 minutes
+const DEFAULT_TIME_OUT = 2 # default timeout value at 2 seconds
 
 function exec_as_multi(ctxt::ConnContext)
   curl = ctxt.curl
@@ -823,9 +823,25 @@ function exec_as_read(ctxt::ConnContext)
   process_response(ctxt)
   return ctxt.resp
 end
+
 # disconnect the curl / curlm, create new ones, try again!
 # use bytes read to figure out the range we need
-function reset_stream(ctxt::ConnContext)
+function resetStream(ctxt::ConnContext)
+  bytesRead =
+  url = ctxt.url
+  disconnect(ctxt)
+
+  ctxt2 = connect(url)
+  curl = ctxt2.curl
+  # make another conenction and set the current context's curls to
+  # the new connection
+  ctxt.curl = curl
+  ctxt.curlm = ctxt2.curlm
+
+  # change the range since some bytes have already been read
+  @ce_curl curl_easy_setopt CURLOPT_RANGE "$(ctxt.stream.bytesRead)-"
+
+  ctxt.stream.state = :CONNECTED
 end
 
 # TODO: timeout implementation, error recovery
@@ -856,7 +872,6 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
     n_active[1] = 1
 
     startTime = time()
-    timedOut = false # TESTING
     while (n_active[1] > 0) && (bytesLeft > 0)
       nb1 = ctxt.bytes_recd # bytes pre-curl
       cmc = curl_multi_perform(curlm, n_active);
@@ -873,7 +888,6 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
         startTime = time() # reset our timer
         bytesLeft -= last  # bytes left to read
       else # failed to read stuff, just yield or timeout
-        if (timeLeft < 0 && !timedOut) println("oh no I timed out D:"); timedOut = true end
         yield()
       end
 
@@ -881,7 +895,7 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
 
     # check curl_multi_perform's results (check if something went wrong or if the transfer is actually done)
     if (n_active[1] < 1)
-      print("transfer finished ")
+      print("TF ")
       msgs_in_queue = Array(Cint,1)
       p_msg::Ptr{CURLMsg2} = curl_multi_info_read(curlm, msgs_in_queue)
 
@@ -913,6 +927,7 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
     elseif (timeLeft <= 0 && bytesLeft > 0) # timed out
       ctxt.stream.bytesRead += length(bytes)
       ctxt.stream.errs += 1
+      print("reset ")
       resetStream()
       if (ctxt.stream.errs > ctxt.options.max_errs)
         throw("oh no too many errors occured ($(ctxt.stream.errs))")
