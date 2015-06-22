@@ -3,7 +3,7 @@ module HTTPC
 using LibCURL
 using LibCURL.Mime_ext
 
-import Base.convert, Base.show, Base.get, Base.put, Base.trace
+import Base.convert, Base.show, Base.get, Base.trace
 
 export init, cleanup, get, connect, put, post, trace, delete, head, options
 export RequestOptions, Response, ConnContext
@@ -287,6 +287,8 @@ function setup_easy_handle(url, options::RequestOptions)
   ### INSECURE, allow https connections; only necessary on Windows due
   ### to lacking a default CA bundle... very sad
   @ce_curl curl_easy_setopt CURLOPT_SSL_VERIFYPEER 0
+  @ce_curl curl_easy_setopt CURLOPT_VERBOSE 1
+  @ce_curl curl_easy_setopt CURLOPT_NOSIGNAL # for threading
 
   if options.content_type != ""
     ct = "Content-Type: " * options.content_type
@@ -433,7 +435,6 @@ end
 function get(ctxt::ConnContext, numBytes::Int64, options::RequestOptions=RequestOptions())
   curl = ctxt.curl
   @ce_curl curl_easy_setopt CURLOPT_HTTPGET 1
-  @ce_curl curl_easy_setopt CURLOPT_VERBOSE 0
 
   ctxt.options.request_timeout = options.request_timeout
   ctxt.options.max_errs = options.max_errs
@@ -682,7 +683,7 @@ urlencode(s::SubString) = urlencode(bytestring(s))
 
 export urlencode
 
-const DEFAULT_TIME_OUT = 2 # default timeout value at 2 seconds
+const DEFAULT_TIME_OUT = 600 # default timeout value at 10 minutes
 
 function exec_as_multi(ctxt::ConnContext)
   curl = ctxt.curl
@@ -731,7 +732,7 @@ function exec_as_multi(ctxt::ConnContext)
         if (msg.msg == CURLMSG_DONE)
           ec = convert(Int, msg.data)
           if (ec != CURLE_OK)
-            #                        println("Result of transfer: " * string(msg.data))
+            println("Result of transfer: " * string(msg.data))
             throw("Error executing request : " * bytestring(curl_easy_strerror(ec)))
           else
             process_response(ctxt)
@@ -826,8 +827,9 @@ end
 
 # disconnect the curl / curlm, create new ones, try again!
 # use bytes read to figure out the range we need
+# TODO: this doesn't work with S3 right now since we also need to redo all the authentication
+# header stuff when we reset...
 function resetStream(ctxt::ConnContext)
-  bytesRead =
   url = ctxt.url
   disconnect(ctxt)
 
@@ -905,7 +907,22 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
         if (msg.msg == CURLMSG_DONE)
           ec = convert(Int, msg.data)
           if (ec != CURLE_OK)
-            throw("Error executing request : " * bytestring(curl_easy_strerror(ec)))
+            if (ec == 56) # recv error, need to reset connection
+              println("recv error, trying again")
+              ctxt.stream.bytesRead += length(bytes)
+              ctxt.stream.errs += 1
+              print("reset ")
+              resetStream(ctxt)
+              if (ctxt.stream.errs > ctxt.options.max_errs)
+                throw("oh no too many errors occured ($(ctxt.stream.errs))")
+              end
+              return [bytes; exec_as_stream(ctxt, bytesLeft)]
+            else
+              println("Context:\n $(ctxt)")
+              println("Bytes:\n $(bytestring(bytes))")
+              flush(STDOUT)
+              throw("Uknown error executing request : " * bytestring(curl_easy_strerror(ec)))
+            end
           else
             ctxt.stream.state = :DONE_DOWNLOADING
           end
@@ -928,7 +945,7 @@ function exec_as_stream(ctxt::ConnContext, numBytes::Int64)
       ctxt.stream.bytesRead += length(bytes)
       ctxt.stream.errs += 1
       print("reset ")
-      resetStream()
+      resetStream(ctxt)
       if (ctxt.stream.errs > ctxt.options.max_errs)
         throw("oh no too many errors occured ($(ctxt.stream.errs))")
       end
