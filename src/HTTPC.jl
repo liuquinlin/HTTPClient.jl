@@ -25,9 +25,12 @@ type RequestOptions
     headers::Vector{Tuple}
     ostream::Union(IO, String, Nothing)
     auto_content_type::Bool
+    max_errs::Int64
+    timeout::Float64
+    ctimeout::Float64
 
-    RequestOptions(; blocking=true, query_params=Array(Tuple,0), request_timeout=def_rto, callback=null_cb, content_type="", headers=Array(Tuple,0), ostream=nothing, auto_content_type=true) =
-    new(blocking, query_params, request_timeout, callback, content_type, headers, ostream, auto_content_type)
+    RequestOptions(; blocking=true, query_params=Array(Tuple,0), request_timeout=def_rto, callback=null_cb, content_type="", headers=Array(Tuple,0), ostream=nothing, auto_content_type=true, max_errs=10, timeout=2, ctimeout=30) =
+        new(blocking, query_params, request_timeout, callback, content_type, headers, ostream, auto_content_type, max_errs, timeout, ctimeout)
 end
 
 type Response
@@ -554,32 +557,52 @@ end
 ##############################
 
 function connect(url::String)
-  return connect([url])
+    return connect([url])
 end
 
-function connect(url::Vector{String})
-  return nothing
+function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOptions())
+    curlm = curl_multi_init()
+    if (curlm == C_NULL) error("Unable to initialize curl_multi_init()") end
+
+    share = curl_share_init()
+    if (share == C_NULL) error("Unable to initialize curl_share_init()") end
+
+    ctxts = ConnContext[]
+    for url in urls
+        ctxt = setup_easy_handle(url, options)
+        curl = ctxt.curl
+        @ce_curl  curl_easy_setopt CURLOPT_SHARE share
+        @ce_curlm curl_multi_add_handle curl
+        push!(ctxts, ctxt)
+    end
+
+    return StreamGroup(ctxts, curlm, share)
 end
 
 function disconnect(group::StreamGroup)
-  return nothing
+    for ctxt in group.ctxts
+        curl_multi_remove_handle(group.curlm, ctxt.curl)
+        cleanup_easy_context(ctxt)
+    end
+    curl_multi_cleanup(group.curlm)
+    curl_share_cleanup(group.share)
 end
 
 function get(group::StreamGroup)
-  return nothing
+    return nothing
 end
 
 function getbytes(group::StreamGroup, numBytes::Int64)
-  numCtxts = length(group.ctxts)
-  return getbytes(group, [numBytes for _=1:numCtxts)
+    numCtxts = length(group.ctxts)
+    return getbytes(group, [numBytes for _=1:numCtxts])
 end
 
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
-  return nothing
+    return nothing
 end
 
 function isDone(group::StreamGroup)
-  return nothing
+    return nothing
 end
 
 ##############################
