@@ -610,10 +610,9 @@ function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOpti
     for url in urls
         ctxt = setup_easy_handle(url, options)
         ctxt.stream.state = :CONNECTED
-        curl = ctxt.curl
         @ce_curl  curl_easy_setopt CURLOPT_HTTPGET 1
         @ce_curl  curl_easy_setopt CURLOPT_SHARE share
-        @ce_curlm curl_multi_add_handle curl
+        @ce_curlm curl_multi_add_handle ctxt.curl
         push!(group.ctxts, ctxt)
         group.curlToCtxt[curl] = ctxt
     end
@@ -754,6 +753,12 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         end # for
 
     end # while
+
+    # return the array of response objects
+    for i=1:numStreams
+        process_response(ctxts[i])
+    end
+    return [ ctxts[i].resp for i=1:numStreams ]
 end
 
 function isDone(group::StreamGroup)
