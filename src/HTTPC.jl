@@ -42,7 +42,6 @@ type Response
 
     Response() = new(nothing, Dict{String, Vector{String}}(), 0, 0.0, 0)
 end
-
 function show(io::IO, o::Response)
     println(io, "HTTP Code   :", o.http_code)
     println(io, "RequestTime :", o.total_time)
@@ -52,7 +51,6 @@ function show(io::IO, o::Response)
             println(io, "    $k : $v")
         end
     end
-
     println(io, "Length of body : ", o.bytes_recd)
 end
 
@@ -77,6 +75,14 @@ type StreamData
  
     StreamData() = new(0, 0, 0, IOBuffer(), :NONE, 0, 0)
 end
+function show(io::IO, o::StreamData)
+    print(io, "streamed: ", o.bytes_streamed)
+    print(io, ", read: ", o.bytes_read)
+    print(io, ", wanted: ", o.bytes_wanted)
+    print(io, ", numErrs: ", o.numErrs)
+    println(io, ", lastTime: ", o.lastTime)
+    print(io, o.buff)
+end
 
 type ConnContext
     curl::Ptr{CURL}
@@ -90,6 +96,19 @@ type ConnContext
 
     ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, StreamData())
 end
+function show(io::IO, o::ConnContext)
+    print(io, "URL : ", o.url)
+    print(io, ", CURL : ", o.curl)
+    println(io, ", slist : ", o.slist)
+    println(io, "ReadData : ", o.rd)
+    println(io, "OStream  : ", o.close_ostream)
+    println("***   Response  ***")
+    print(io, o.resp)
+    println("***   Options   ***")
+    println(io, o.options)
+    println("*** Stream Data ***")
+    println(io, o.stream)
+end
 
 type StreamGroup
     ctxts::Vector{ConnContext}
@@ -97,6 +116,21 @@ type StreamGroup
     share::Ptr{CURL}
 
     StreamGroup(contexts, curlm, share) = new(contexts, curlm, share)
+end
+function show(io::IO, o::StreamGroup)
+    println("#===============================#")
+    println("#          Stream Group         #")
+    println("#===============================#")
+    println(io, "multi handle : ", o.curlm)
+    println(io, "share handle : ", o.share)
+    i = 0
+    for ctxt in o.ctxts
+        i += 1
+        println("---------------------")
+        println(io, "|     Context $(i):    |")
+        println("---------------------")
+        print(io, ctxt)
+    end
 end
 
 immutable CURLMsgResult
