@@ -70,9 +70,9 @@ type ConnContext
     resp::Response
     options::RequestOptions
     close_ostream::Bool
-    stream::Union{StreamData, Nothing}
+    stream::StreamData
 
-    ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, nothing)
+    ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, StreamData())
 end
 
 type StreamData
@@ -84,12 +84,16 @@ type StreamData
     numErrs::Int64
     lastTime::Float64
     group::Union{StreamGroup, Nothing}
+ 
+    StreamData() = new(0, 0, 0, IOBuffer(), :NONE, 0, 0, nothing)
 end
 
 type StreamGroup
     contexts::Vector{ConnContext}
     curlm::Ptr{CURL}
     share::Ptr{CURL}
+
+    StreamGroup(contexts, curlm, share) = new(contexts, curlm, share)
 end
 
 immutable CURLMsgResult
