@@ -7,6 +7,7 @@ using LibCURL.Mime_ext
 import Base.convert, Base.show, Base.get, Base.trace
 
 export init, cleanup, get, put, post, trace, delete, head, options
+export connect, disconnect, getbytes, isDone
 export RequestOptions, Response
 
 def_rto = 0.0
@@ -88,7 +89,7 @@ type ConnContext
 end
 
 type StreamGroup
-    contexts::Vector{ConnContext}
+    ctxts::Vector{ConnContext}
     curlm::Ptr{CURL}
     share::Ptr{CURL}
 
@@ -548,6 +549,38 @@ function custom(url::String, verb::String, options::RequestOptions)
     end
 end
 
+##############################
+# STREAMING FUNCTIONS
+##############################
+
+function connect(url::String)
+  return connect([url])
+end
+
+function connect(url::Vector{String})
+  return nothing
+end
+
+function disconnect(group::StreamGroup)
+  return nothing
+end
+
+function get(group::StreamGroup)
+  return nothing
+end
+
+function getbytes(group::StreamGroup, numBytes::Int64)
+  numCtxts = length(group.ctxts)
+  return getbytes(group, [numBytes for _=1:numCtxts)
+end
+
+function getbytes(group::StreamGroup, numBytes::Vector{Int64})
+  return nothing
+end
+
+function isDone(group::StreamGroup)
+  return nothing
+end
 
 ##############################
 # EXPORTED UTILS
