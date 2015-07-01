@@ -8,7 +8,7 @@ import Base.convert, Base.show, Base.get, Base.trace
 
 export init, cleanup, get, put, post, trace, delete, head, options
 export connect, disconnect, getbytes, isDone
-export RequestOptions, Response
+export RequestOptions, Response, ConnContext, StreamData, StreamGroup
 
 def_rto = 0.0
 
@@ -73,7 +73,8 @@ type StreamData
     numErrs::Int64
     lastTime::Float64
  
-    StreamData() = new(0, 0, 0, IOBuffer(), :NONE, 0, 0)
+    const MAX_BUFF_SIZE = 16*1024 # 16KiB
+    StreamData() = new(0, 0, 0, IOBuffer(MAX_BUFF_SIZE), :NONE, 0, 0)
 end
 function show(io::IO, o::StreamData)
     print(io, "streamed: ", o.bytes_streamed)
@@ -636,7 +637,12 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
 end
 
 function isDone(group::StreamGroup)
-    return nothing
+    for ctxt in group.ctxts
+        if (ctxt.stream.state == :DONE)
+            return false
+        end
+    end
+    return true
 end
 
 ##############################
