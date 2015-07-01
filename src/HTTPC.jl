@@ -62,6 +62,18 @@ type ReadData
     ReadData() = new(:undefined, false, "", 0, 0)
 end
 
+type StreamData
+    bytes_streamed::Int64
+    bytes_read::Int64
+    bytes_wanted::Int64
+    buff::IOBuffer
+    state::Symbol
+    numErrs::Int64
+    lastTime::Float64
+ 
+    StreamData() = new(0, 0, 0, IOBuffer(), :NONE, 0, 0)
+end
+
 type ConnContext
     curl::Ptr{CURL}
     url::String
@@ -73,19 +85,6 @@ type ConnContext
     stream::StreamData
 
     ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, StreamData())
-end
-
-type StreamData
-    bytes_streamed::Int64
-    bytes_read::Int64
-    bytes_wanted::Int64
-    buff::IOBuffer
-    state::Symbol
-    numErrs::Int64
-    lastTime::Float64
-    group::Union{StreamGroup, Nothing}
- 
-    StreamData() = new(0, 0, 0, IOBuffer(), :NONE, 0, 0, nothing)
 end
 
 type StreamGroup
