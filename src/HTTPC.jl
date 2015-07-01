@@ -75,10 +75,10 @@ type ConnContext
     ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false)
 end
 
-immutable CURLMsg2
+immutable CURLMsgResult
   msg::CURLMSG
   easy_handle::Ptr{CURL}
-  data::Ptr{Any}
+  result::CURLcode
 end
 
 type MultiCtxt
@@ -704,16 +704,14 @@ function exec_as_multi(ctxt)
 
         if (n_active[1] == 0)
             msgs_in_queue = Array(Cint,1)
-            p_msg::Ptr{CURLMsg2} = curl_multi_info_read(curlm, msgs_in_queue)
+            p_msg::Ptr{CURLMsgResult} = curl_multi_info_read(curlm, msgs_in_queue)
 
             while (p_msg != C_NULL)
-#                println("Messages left in Q : " * string(msgs_in_queue[1]))
                 msg = unsafe_load(p_msg)
 
                 if (msg.msg == CURLMSG_DONE)
-                    ec = convert(Int, msg.data)
+                    ec = msg.result
                     if (ec != CURLE_OK)
-#                        println("Result of transfer: " * string(msg.data))
                         throw("Error executing request : " * bytestring(curl_easy_strerror(ec)))
                     else
                         process_response(ctxt)
@@ -734,6 +732,6 @@ function exec_as_multi(ctxt)
     ctxt.resp
 end
 
-
+println("If this prints, you're in the right version of HTTPClient.jl")
 
 end
