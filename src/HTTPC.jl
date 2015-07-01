@@ -31,7 +31,7 @@ end
 
 type Response
     body
-    headers :: Dict{String, Vector{String}}
+    headers::Dict{String, Vector{String}}
     http_code
     total_time
     bytes_recd::Integer
@@ -52,7 +52,6 @@ function show(io::IO, o::Response)
     println(io, "Length of body : ", o.bytes_recd)
 end
 
-
 type ReadData
     typ::Symbol
     src::Any
@@ -71,8 +70,26 @@ type ConnContext
     resp::Response
     options::RequestOptions
     close_ostream::Bool
+    stream::Union{StreamData, Nothing}
 
-    ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false)
+    ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, nothing)
+end
+
+type StreamData
+    bytes_streamed::Int64
+    bytes_read::Int64
+    bytes_wanted::Int64
+    buff::IOBuffer
+    state::Symbol
+    numErrs::Int64
+    lastTime::Float64
+    group::Union{StreamGroup, Nothing}
+end
+
+type StreamGroup
+    contexts::Vector{ConnContext}
+    curlm::Ptr{CURL}
+    share::Ptr{CURL}
 end
 
 immutable CURLMsgResult
@@ -80,17 +97,6 @@ immutable CURLMsgResult
   easy_handle::Ptr{CURL}
   result::CURLcode
 end
-
-type MultiCtxt
-    s::curl_socket_t    # Socket
-    chk_read::Bool
-    chk_write::Bool
-    timeout::Float64
-
-    MultiCtxt() = new(0,false,false,0.0)
-end
-
-
 
 ##############################
 # Callbacks
@@ -340,27 +346,6 @@ function process_response(ctxt)
     ctxt.resp.http_code = http_code[1]
     ctxt.resp.total_time = total_time[1]
 end
-
-# function blocking_get (url)
-#     try
-#         ctxt=nothing
-#         ctxt = setup_easy_handle(url)
-#         curl = ctxt.curl
-#
-#         @ce_curl curl_easy_perform
-#
-#         process_response(ctxt)
-#
-#         return ctxt.resp
-#     finally
-#         if isa(ctxt, ConnContext) && (ctxt.curl != 0)
-#             curl_easy_cleanup(ctxt.curl)
-#         end
-#     end
-# end
-
-
-
 
 
 ##############################
@@ -640,48 +625,6 @@ function exec_as_multi(ctxt)
         started_at = time()
         time_left = request_timeout
 
-    # poll_fd is unreliable when multiple parallel fds are active, hence using curl_multi_perform
-
-# START curl_multi_socket_action  mode
-
-#         @ce_curlm curl_multi_setopt CURLMOPT_SOCKETFUNCTION c_curl_socket_cb
-#         @ce_curlm curl_multi_setopt CURLMOPT_TIMERFUNCTION c_curl_multi_timer_cb
-#
-#         muctxt = MultiCtxt()
-#         p_muctxt = pointer_from_objref(muctxt)
-#
-#         @ce_curlm curl_multi_setopt CURLMOPT_SOCKETDATA p_muctxt
-#         @ce_curlm curl_multi_setopt CURLMOPT_TIMERDATA p_muctxt
-#
-#
-#         @ce_curlm curl_multi_socket_action CURL_SOCKET_TIMEOUT 0 n_active
-#
-#         while (n_active[1] > 0) && (time_left > 0)
-#             evt_got = 0
-#             if (muctxt.chk_read || muctxt.chk_write)
-#                 t1 = int64(time() * 1000)
-#
-#                 poll_to = min(muctxt.timeout < 0.0 ? no_to : muctxt.timeout, time_left)
-#                 pfd_ret = poll_fd(RawFD(muctxt.s), poll_to, readable=muctxt.chk_read, writable=muctxt.chk_write)
-#
-#                 evt_got = (isreadable(pfd_ret) ? CURL_CSELECT_IN : 0) | (iswritable(pfd_ret) ? CURL_CSELECT_OUT : 0)
-#             else
-#                 break
-#             end
-#
-#             if (evt_got == 0)
-#                 @ce_curlm curl_multi_socket_action CURL_SOCKET_TIMEOUT 0 n_active
-#             else
-#                 @ce_curlm curl_multi_socket_action muctxt.s evt_got n_active
-#             end
-#
-#             time_left = request_timeout - (time() - started_at)
-#         end
-
-# END curl_multi_socket_action  mode
-
-# START curl_multi_perform  mode
-
         cmc = curl_multi_perform(curlm, n_active);
         while (n_active[1] > 0) &&  (time_left > 0)
             nb1 = ctxt.resp.bytes_recd
@@ -698,9 +641,6 @@ function exec_as_multi(ctxt)
 
             time_left = request_timeout - (time() - started_at)
         end
-
-# END OF curl_multi_perform
-
 
         if (n_active[1] == 0)
             msgs_in_queue = Array(Cint,1)
@@ -732,6 +672,6 @@ function exec_as_multi(ctxt)
     ctxt.resp
 end
 
-println("If this prints, you're in the right version of HTTPClient.jl")
+println("If this prints, you're using the right version of HTTPClient.jl")
 
 end
