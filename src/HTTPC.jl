@@ -322,28 +322,20 @@ function get_ct_from_ext(filename)
     return false
 end
 
+function setup_curl(ctxt::ConnContext)
+    ctxt.curl = curl_easy_init()
+    if (ctxt.curl == C_NULL) throw("curl_easy_init() failed") end
 
-function setup_easy_handle(url, options::RequestOptions)
-    ctxt = ConnContext(options)
-
-    curl = curl_easy_init()
-    if (curl == C_NULL) throw("curl_easy_init() failed") end
-
-    ctxt.curl = curl
+    if length(ctxt.options.query_params) > 0
+        qp = urlencode_query_params(ctxt.curl, ctxt.options.query_params)
+        ctxt.url = ctxt.url * "?" * qp
+    end
 
     @ce_curl curl_easy_setopt CURLOPT_FOLLOWLOCATION 1
 
     @ce_curl curl_easy_setopt CURLOPT_MAXREDIRS 5
 
-    if length(options.query_params) > 0
-        qp = urlencode_query_params(curl, options.query_params)
-        url = url * "?" * qp
-    end
-
-
-    ctxt.url = url
-
-    @ce_curl curl_easy_setopt CURLOPT_URL url
+    @ce_curl curl_easy_setopt CURLOPT_URL ctxt.url
     @ce_curl curl_easy_setopt CURLOPT_WRITEFUNCTION c_write_cb
 
     p_ctxt = pointer_from_objref(ctxt)
@@ -353,6 +345,12 @@ function setup_easy_handle(url, options::RequestOptions)
     @ce_curl curl_easy_setopt CURLOPT_HEADERFUNCTION c_header_cb
     @ce_curl curl_easy_setopt CURLOPT_HEADERDATA p_ctxt
 
+    @ce_curl curl_easy_setopt CURLOPT_HTTPHEADER ctxt.slist
+end
+
+function setup_easy_handle(url, options::RequestOptions)
+    ctxt = ConnContext(options)
+
     if options.content_type != ""
         ct = "Content-Type: " * options.content_type
         ctxt.slist = curl_slist_append (ctxt.slist, ct)
@@ -361,7 +359,6 @@ function setup_easy_handle(url, options::RequestOptions)
         ctxt.slist = curl_slist_append (ctxt.slist, "Content-Type:")
     end
 
-
     for hdr in options.headers
         hdr_str = hdr[1] * ":" * hdr[2]
         ctxt.slist = curl_slist_append (ctxt.slist, hdr_str)
@@ -369,7 +366,9 @@ function setup_easy_handle(url, options::RequestOptions)
 
     # Disabling the Expect header since some webservers don't handle this properly
     ctxt.slist = curl_slist_append (ctxt.slist, "Expect:")
-    @ce_curl curl_easy_setopt CURLOPT_HTTPHEADER ctxt.slist
+
+    ctxt.url = url
+    setup_curl(ctxt)
 
     if isa(options.ostream, String)
         ctxt.resp.body = open(options.ostream, "w+")
@@ -380,7 +379,7 @@ function setup_easy_handle(url, options::RequestOptions)
         ctxt.resp.body = IOBuffer()
     end
 
-    ctxt
+    return ctxt
 end
 
 function cleanup_easy_context(ctxt::Union(ConnContext,Bool))
@@ -656,7 +655,7 @@ function disconnect(group::StreamGroup)
 end
 
 function get(group::StreamGroup)
-    return nothing
+    error("this method is currently unsupported")
 end
 
 function getbytes(group::StreamGroup, numBytes::Int64)
@@ -664,9 +663,21 @@ function getbytes(group::StreamGroup, numBytes::Int64)
     return getbytes(group, [numBytes for _=1:numCtxts])
 end
 
-function resetContext(ctxt::ConnContext)
-    println("Resetting context...")
-    error("Reset not supported yet sorry D:")
+function resetContext(group::StreamGroup, ctxt::ConnContext)
+    delete!(group.curlToCtxt, ctxt.curl)
+
+    curlm = group.curlm
+    curl_multi_remove_handle(curlm, ctxt.curl)
+    curl_easy_cleanup(ctxt.curl)
+
+    setup_curl(ctxt)
+    @ce_curl curl_easy_setopt CURLOPT_HTTPGET 1
+    @ce_curl curl_easy_setopt CURLOPT_RANGE "$(ctxt.stream.bytes_streamed)-"
+    @ce_curl curl_easy_setopt CURLOPT_SHARE group.share
+    group.curlToCtxt[ctxt.curl] = ctxt
+    @ce_curlm curl_multi_add_handle ctxt.curl
+    ctxt.stream.lastTime = time()
+    ctxt.stream.state    = :CONNECTED
 end
 
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
@@ -732,7 +743,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                             error("too many errors, aborting")
                         end
                         println("recv error, retrying")
-                        resetContext(ctxts[i])
+                        resetContext(group, ctxts[i])
                     elseif (curlcode != CURLE_OK)
                         error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
                     end
@@ -775,7 +786,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                     elseif s.state == :CONNECTED
                         println("timed out while connecting: $(timeElap)")
                     end
-                    resetContext(ctxts[i])
+                    resetContext(group, ctxts[i])
                 end
             end
 
