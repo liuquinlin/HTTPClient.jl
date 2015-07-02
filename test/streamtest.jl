@@ -32,15 +32,63 @@ function test_stream_one_file(url::ASCIIString, chunkSize::Int64)
         i += 1
     end
     @test streamed == correct
+    HTTPC.disconnect(s)
+end
+
+function test_stream_many_files(urls::Vector{ASCIIString}, chunkSize::Vector{Int64})
+    s = HTTPC.connect(urls)
+#=    correct = []
+    for i=1:length(urls)
+        push!(correct, HTTPC.get(urls[i]).body.data)
+    end =#
+
+    i = 0
+    start = time()
+    while !HTTPC.isDone(s)
+        resps = HTTPC.getbytes(s, chunkSize)
+        httpCodesAreOK = true
+        for i=1:length(resps)
+            if !(resps[i].http_code == 200 || resps[i].http_code == 206)
+                httpCodesAreOK = false
+                break
+            end
+        end
+        @test httpCodesAreOK
+    end
+    println("time elapsed: $(time() - start)")
 end
 
 function run_tests()
     println("--- CONNECTION TESTS ---")
     test_connect()
+
     println("--- STREAM ONE SMALL FILE ---")
     test_stream_one_file("davis-test.s3.amazonaws.com/testing.txt", 16)
+
+    println("--- STREAM ENTIRE FILE AT ONCE ---")
+    test_stream_one_file("davis-test.s3.amazonaws.com/testing.txt", 1000)
+
     println("--- STREAM ONE LARGE FILE ---")
     test_stream_one_file("davis-test.s3.amazonaws.com/bigtest.txt", 1024*8)
+
+    println("--- STREAM ONE LARGE FILE MANY BYTES AT A TIME ---")
+    test_stream_one_file("davis-test.s3.amazonaws.com/bigtest.txt", 100000)
+
+    println("--- STREAM 512 SMALL FILES ---")
+    urls = [ "davis-test.s3.amazonaws.com/testing.txt" for _=1:512 ]
+    chunkSize = [ 16 for _=1:512 ]
+    test_stream_many_files(urls, chunkSize)
+
+    println("--- STREAM 2048 SMALL FILES ---")
+    urls = [ "davis-test.s3.amazonaws.com/testing.txt" for _=1:2048 ]
+    chunkSize = [ 16 for _=1:2048 ]
+    test_stream_many_files(urls, chunkSize)
+
+    println("--- STREAM TWO DIFFERENT FILES ---")
+    urls = [ "davis-test.s3.amazonaws.com/testing.txt", "davis-test.s3.amazonaws.com/bigtest.txt" ]
+    chunkSize = [ 16 , 8*1024 ]
+    test_stream_many_files(urls, chunkSize)
+
     println("--- TESTS DONE ---")
 end
 
