@@ -120,7 +120,7 @@ function run_tests()
 
     println("--- STREAM 2048 BIG FILES ---")
     urls = [ "davis-test.s3.amazonaws.com/bigtest.txt" for _=1:2048 ]
-    chunkSize = [ 16 for _=1:2048 ]
+    chunkSize = [ 8*1024 for _=1:2048 ]
     test_stream_many_files(urls, chunkSize, sameFile=true)
 
     println("--- TESTS DONE ---")
