@@ -51,7 +51,11 @@ function show(io::IO, o::Response)
             println(io, "    $k : $v")
         end
     end
-    println(io, "Length of body : ", o.bytes_recd)
+    if isa(o.body, Vector{Uint8})
+        println(io, "Length of body : ", length(o.body))
+    else
+        println(io, "Length of body : ", o.bytes_recd)
+    end
 end
 
 type ReadData
@@ -662,6 +666,7 @@ end
 
 function resetContext(ctxt::ConnContext)
     println("Resetting context...")
+    error("Reset not supported yet sorry D:")
 end
 
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
@@ -675,12 +680,12 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     # read from each stream's local buffer
     for i=1:numStreams
         s = ctxts[i].stream
-        r = ctxts[i].resp.body
+        r = ctxts[i].resp
         s.bytes_wanted = numBytes[i]
         data = s.buff.data
         last = (s.bytes_wanted < length(data)) ? s.bytes_wanted : length(data)
         if last > 0
-            r  = data[1:last]
+            r.body  = data[1:last]
             s.buff.data = data[last+1:end]
             s.bytes_wanted -= last
             s.bytes_read   += last
@@ -713,7 +718,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         end
 
         # check for finished transfers / handle errors
-        if (group.running[1] - oldRunning > 0)
+        if (oldRunning > group.running[1])
             while (p_msg::Ptr{CURLMsgResult} = curl_multi_info_read(group.curlm, Cint[0])) != C_NULL
                 msg = unsafe_load(p_msg)
                 curl = msg.easy_handle
@@ -740,19 +745,18 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         numDone = 0
         for i=1:numStreams
             s = ctxts[i].stream
-            r = ctxts[i].resp.body
+            r = ctxts[i].resp
             if s.state == :DONE # don't bother with finished ones
                 numDone += 1
                 continue
             end
             data = s.buff.data
-            last = s.bytes_wanted < length(data) ? s.bytesWanted : length(data)
-            print(last)
+            last = s.bytes_wanted < length(data) ? s.bytes_wanted : length(data)
             if last > 0
                 if s.state == :CONNECTED
                     s.state = :DOWNLOADING
                 end
-                r = [ r ; data[1:last] ]
+                r.body = [ r.body ; data[1:last] ]
                 s.buff.data = data[last+1:end]
                 s.bytes_wanted -= last
                 s.bytes_read   += last
@@ -780,8 +784,13 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 curl_easy_pause(ctxts[i].curl, CURLPAUSE_ALL)
                 numDone += 1
             end
-        end # for
 
+            # check for streams that are completely finished (empty)
+            if s.state == :DONE_DOWNLOADING && s.bytes_read == s.bytes_streamed
+                s.state = :DONE
+            end
+        end # for
+        sleep(.005)
     end # while
 
     # return the array of response objects
