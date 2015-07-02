@@ -112,7 +112,7 @@ function show(io::IO, o::ConnContext)
     println(io, o.stream)
 end
 
-type GroupOpts
+#= type GroupOpts
     max_errs::Int64
     timeout::Float64
     ctimeout::Float64
@@ -123,7 +123,7 @@ function show(io::IO, o::GroupOpts)
     print(io, "max errs: ", o.max_errs)
     print(io, ", timeout: ", o.timeout)
     println(io, ", connect timeout: ", o.ctimeout)
-end
+end =#
 
 type StreamGroup
     ctxts::Vector{ConnContext}
@@ -131,7 +131,6 @@ type StreamGroup
     share::Ptr{CURL}
     running::Vector{Cint}
     curlToCtxt::Dict{Ptr{CURL}, ConnContext}
-    opts::GroupOpts
 
     StreamGroup(curlm, share) = new(ConnContext[], curlm, share, Cint[], Dict{Ptr{CURL}, ConnContext}())
 end
@@ -170,10 +169,10 @@ function write_cb(buff::Ptr{Uint8}, sz::Csize_t, n::Csize_t, p_ctxt::Ptr{Void})
         write(ctxt.resp.body, buff, nbytes)
     else
         ctxt.stream.buff = IOBuffer()
+        ctxt.stream.bytes_streamed += nbytes
         write(ctxt.stream.buff, buff, nbytes)
     end
-    ctxt.resp.bytes_recd = ctxt.resp.bytes_recd + nbytes
-
+    ctxt.resp.bytes_recd += nbytes
     nbytes::Csize_t
 end
 
@@ -627,7 +626,6 @@ function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOpti
 
     group = StreamGroup(curlm, share)
     group.running = Cint[length(urls)]
-    group.opts = GroupOpts(options.max_errs, options.timeout, options.ctimeout)
 
     ctxts = ConnContext[]
     for url in urls
@@ -704,7 +702,9 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     end
 
     # get new data from the connections
-    to = group.opts.timeout; cto = group.opts.ctimeout; max_errs = group.opts.max_errs
+    timeout  = ctxts[1].options.timeout
+    ctimeout = ctxts[1].options.ctimeout
+    max_errs = ctxts[1].options.max_errs
     while numDone < numStreams
         oldRunning = group.running[1]
         curlmcode = curl_multi_perform(group.curlm, group.running)
@@ -724,7 +724,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                     if (curlcode == CURLE_RECV_ERROR)
                         s.numErrs += 1
                         if (s.numErrs > max_errs)
-                            error("Too many errors, aborting")
+                            error("too many errors, aborting")
                         end
                         println("recv error, retrying")
                         resetContext(ctxts[i])
@@ -749,7 +749,6 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
             last = s.bytes_wanted < length(data) ? s.bytesWanted : length(data)
             print(last)
             if last > 0
-                print(" got here")
                 if s.state == :CONNECTED
                     s.state = :DOWNLOADING
                 end
@@ -757,14 +756,15 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 s.buff.data = data[last+1:end]
                 s.bytes_wanted -= last
                 s.bytes_read   += last
+                s.lastTime = time()
             elseif s.bytes_wanted > 0
                 # check for timeouts
                 timeElap = time() - s.lastTime
 
-                if (s.state == :DOWNLOADING && timeElap > to) || (s.state == :CONNECTED && timeElap > cto)
+                if (s.state == :DOWNLOADING && timeElap > timeout) || (s.state == :CONNECTED && timeElap > ctimeout)
                     s.numErrs += 1
                     if (s.numErrs > max_errs)
-                        error("Too many errors, aborting")
+                        error("too many errors, aborting")
                     end
                     if s.state == :DOWNLOADING
                         println("timed out while streaming: $(timeElap)")
