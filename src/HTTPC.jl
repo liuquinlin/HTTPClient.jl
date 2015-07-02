@@ -29,7 +29,10 @@ type RequestOptions
     timeout::Float64
     ctimeout::Float64
 
-    RequestOptions(; blocking=true, query_params=Array(Tuple,0), request_timeout=def_rto, callback=null_cb, content_type="", headers=Array(Tuple,0), ostream=nothing, auto_content_type=true, max_errs=10, timeout=2, ctimeout=30) =
+    const def_max_errs = 10
+    const def_timeout  = 10
+    const def_ctimeout = 60
+    RequestOptions(; blocking=true, query_params=Array(Tuple,0), request_timeout=def_rto, callback=null_cb, content_type="", headers=Array(Tuple,0), ostream=nothing, auto_content_type=true, max_errs=def_max_errs, timeout=def_timeout, ctimeout=def_ctimeout) =
         new(blocking, query_params, request_timeout, callback, content_type, headers, ostream, auto_content_type, max_errs, timeout, ctimeout)
 end
 
