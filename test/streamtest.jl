@@ -35,17 +35,21 @@ function test_stream_one_file(url::ASCIIString, chunkSize::Int64)
     HTTPC.disconnect(s)
 end
 
-function test_stream_many_files(urls::Vector{ASCIIString}, chunkSize::Vector{Int64})
-    s = HTTPC.connect(urls)
-#=    correct = []
-    for i=1:length(urls)
-        push!(correct, HTTPC.get(urls[i]).body.data)
-    end =#
+function test_stream_many_files(urls::Vector{ASCIIString}, chunkSize::Vector{Int64}; sameFile=false)
+    options = RequestOptions(timeout=3, ctimeout=30)
+    s = HTTPC.connect(urls, options)
 
     i = 0
     start = time()
+    streamed = []
+    for i=1:length(urls)
+        push!(streamed, [])
+    end
     while !HTTPC.isDone(s)
         resps = HTTPC.getbytes(s, chunkSize)
+        for i=1:length(resps)
+            streamed[i] = [ streamed[i] ; resps[i].body ]
+        end
         httpCodesAreOK = true
         for i=1:length(resps)
             if !(resps[i].http_code == 200 || resps[i].http_code == 206)
@@ -54,8 +58,28 @@ function test_stream_many_files(urls::Vector{ASCIIString}, chunkSize::Vector{Int
             end
         end
         @test httpCodesAreOK
+        returnContentsMatch = true
+        for i=2:length(resps)
+            if (resps[i-1].body != resps[i].body)
+                returnContentsMatch = false
+                break
+            end
+        end
+        @test returnContentsMatch
     end
-    println("time elapsed: $(time() - start)")
+    finish = time()
+
+    allContentsAreCorrect = true
+    for i=1:length(urls)
+        correct = HTTPC.get(urls[i]).body.data
+        if correct != streamed[i]
+            allContentsAreCorrect = false
+            break
+        end
+    end 
+    @test allContentsAreCorrect
+
+    println("time elapsed: $(finish - start)")
 end
 
 function run_tests()
@@ -77,17 +101,27 @@ function run_tests()
     println("--- STREAM 512 SMALL FILES ---")
     urls = [ "davis-test.s3.amazonaws.com/testing.txt" for _=1:512 ]
     chunkSize = [ 16 for _=1:512 ]
-    test_stream_many_files(urls, chunkSize)
+    test_stream_many_files(urls, chunkSize, sameFile=true)
 
     println("--- STREAM 2048 SMALL FILES ---")
     urls = [ "davis-test.s3.amazonaws.com/testing.txt" for _=1:2048 ]
     chunkSize = [ 16 for _=1:2048 ]
-    test_stream_many_files(urls, chunkSize)
+    test_stream_many_files(urls, chunkSize, sameFile=true)
 
     println("--- STREAM TWO DIFFERENT FILES ---")
     urls = [ "davis-test.s3.amazonaws.com/testing.txt", "davis-test.s3.amazonaws.com/bigtest.txt" ]
     chunkSize = [ 16 , 8*1024 ]
     test_stream_many_files(urls, chunkSize)
+
+    println("--- STREAM 512 BIG FILES ---")
+    urls = [ "davis-test.s3.amazonaws.com/bigtest.txt" for _=1:512 ]
+    chunkSize = [ 16 for _=1:512 ]
+    test_stream_many_files(urls, chunkSize, sameFile=true)
+
+    println("--- STREAM 2048 BIG FILES ---")
+    urls = [ "davis-test.s3.amazonaws.com/bigtest.txt" for _=1:2048 ]
+    chunkSize = [ 16 for _=1:2048 ]
+    test_stream_many_files(urls, chunkSize, sameFile=true)
 
     println("--- TESTS DONE ---")
 end
