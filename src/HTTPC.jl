@@ -151,7 +151,12 @@ function write_cb(buff::Ptr{Uint8}, sz::Csize_t, n::Csize_t, p_ctxt::Ptr{Void})
 #    println("@write_cb")
     ctxt = unsafe_pointer_to_objref(p_ctxt)
     nbytes = sz * n
-    write(ctxt.resp.body, buff, nbytes)
+    if (ctxt.stream.state == :NONE)
+        write(ctxt.resp.body, buff, nbytes)
+    else
+        ctxt.stream.buff = IOBuffer()
+        write(ctxt.stream.buff, buff, nbytes)
+    end
     ctxt.resp.bytes_recd = ctxt.resp.bytes_recd + nbytes
 
     nbytes::Csize_t
@@ -614,7 +619,7 @@ function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOpti
         @ce_curl  curl_easy_setopt CURLOPT_SHARE share
         @ce_curlm curl_multi_add_handle ctxt.curl
         push!(group.ctxts, ctxt)
-        group.curlToCtxt[curl] = ctxt
+        group.curlToCtxt[ctxt.curl] = ctxt
     end
 
     return group
@@ -643,8 +648,8 @@ function resetCtxt(ctxt::ConnContext)
 end
 
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
-    numStreams = length(ctxts)
     ctxts = group.ctxts
+    numStreams = length(ctxts)
     # each ctxt will return an array of bytes in its Response
     for ctxt in ctxts 
         ctxt.resp.body = Uint8[] 
@@ -652,12 +657,12 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
 
     numDone = 0
     # read from each stream's local buffer
-    for i=1:n
+    for i=1:numStreams
         s = ctxts[i].stream
         r = ctxts[i].resp.body
         s.bytes_wanted = numBytes[i]
         data = s.buff.data
-        last = (s.bytesWanted < length(data)) ? s.bytesWanted : length(data)
+        last = (s.bytes_wanted < length(data)) ? s.bytes_wanted : length(data)
         if last > 0
             r  = data[1:last]
             s.buff.data = data[last+1:end]

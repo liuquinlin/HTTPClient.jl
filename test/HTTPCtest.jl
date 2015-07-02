@@ -1,9 +1,18 @@
 using HTTPClient.HTTPC
 
 println("Testing...")
-s = HTTPC.connect("www.wikipedia.com")
-display(s)
-HTTPC.disconnect(s)
-s = HTTPC.connect(["www.google.com", "www.yahoo.com"])
-display(s)
-HTTPC.disconnect(s)
+urls = ASCIIString[]
+numFiles = 5
+for i=1:numFiles
+    push!(urls, "davis-test.s3.amazonaws.com")
+end
+
+s = HTTPC.connect(urls)
+#while !HTTPC.isDone(s)
+try
+    r = HTTPC.getbytes(s, 1000)
+    display(r)
+finally
+    #end
+    HTTPC.disconnect(s)
+end
