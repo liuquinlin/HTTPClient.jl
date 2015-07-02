@@ -116,9 +116,10 @@ type StreamGroup
     ctxts::Vector{ConnContext}
     curlm::Ptr{CURL}
     share::Ptr{CURL}
+    running::Vector{Cint}
     curlToCtxt::Dict{Ptr{CURL}, ConnContext}
 
-    StreamGroup(curlm, share) = new(ConnContext[], curlm, share, Dict{Ptr{CURL}, ConnContext}())
+    StreamGroup(curlm, share) = new(ConnContext[], curlm, share, Dict{Ptr{CURL}, Cint[], ConnContext}())
 end
 function show(io::IO, o::StreamGroup)
     println("#===============================#")
@@ -621,6 +622,7 @@ function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOpti
         push!(group.ctxts, ctxt)
         group.curlToCtxt[ctxt.curl] = ctxt
     end
+    group.running = Cint[length(ctxts)]]
 
     return group
 end
@@ -687,30 +689,33 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
 
     # get new data from the connections
     while numDone < numStreams
-        curlmcode = curl_multi_perform(curlm, running)
+        oldRunning = group.running[1]
+        curlmcode = curl_multi_perform(curlm, group.running)
         if (curlmcode != CURLM_OK)
             error("curl_multi_perform failed " * bytestring(curl_multi_strerror(curlmcode))) 
         end
 
         # check for finished transfers / handle errors
-        while (p_msg::Ptr{CURLMsgResult} = curl_multi_info_read(curlm, Cint[0])) != C_NULL
-            msg = unsafe_load(p_msg)
-            curl = msg.easy_handle
-            if msg.msg == CURLMSG_DONE
-                curlcode = msg.result
-                ctxt = group.curlToCtxt[curl]
-                s = ctxt.stream
-                if (curlcode == CURLE_RECV_ERROR)
-                    s.numErrs += 1
-                    if (s.numErrs > maxErrs)
-                        error("Too many errors, aborting")
+        if (group.running[1] - oldRunning > 0)
+            while (p_msg::Ptr{CURLMsgResult} = curl_multi_info_read(curlm, Cint[0])) != C_NULL
+                msg = unsafe_load(p_msg)
+                curl = msg.easy_handle
+                if msg.msg == CURLMSG_DONE
+                    curlcode = msg.result
+                    ctxt = group.curlToCtxt[curl]
+                    s = ctxt.stream
+                    if (curlcode == CURLE_RECV_ERROR)
+                        s.numErrs += 1
+                        if (s.numErrs > maxErrs)
+                            error("Too many errors, aborting")
+                        end
+                        println("recv error, retrying")
+                        resetContext(ctxt)
+                    elseif (curlcode != CURLE_OK)
+                        error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
                     end
-                    println("recv error, retrying")
-                    resetContext(ctxt)
-                elseif (curlcode != CURLE_OK)
-                    error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
+                    s.state = :DONE_DOWNLOADING
                 end
-                s.state = :DONE_DOWNLOADING
             end
         end
 
@@ -773,6 +778,9 @@ function isDone(group::StreamGroup)
         end
     end
     return true
+    #= alternatively:
+    return (group.running[1] == 0)
+    =#
 end
 
 ##############################
