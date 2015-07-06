@@ -776,13 +776,17 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                     curlcode = msg.result
                     ctxt = group.curlToCtxt[curl]
                     s = ctxt.stream
-                    if (curlcode == CURLE_RECV_ERROR)
+                    if (curlcode == CURLE_RECV_ERROR || curlcode == CURLE_COULDNT_CONNECT)
                         s.numErrs += 1
                         if (s.numErrs > max_errs)
                             error("too many errors, aborting")
                         end
-                        println("recv error, retrying")
-                        resetContext(group, ctxts[i])
+                        if (curlcode == CURLE_RECV_ERROR)
+                            println("recv error, retrying")
+                        elseif (curlcode == CURLE_COULDNT_CONNECT)
+                            println("couldn't connect, retrying")
+                        end
+                        resetContext(group, ctxt)
                     elseif (curlcode != CURLE_OK)
                         error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
                     end
