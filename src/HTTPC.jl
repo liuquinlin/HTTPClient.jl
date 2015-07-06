@@ -648,6 +648,34 @@ function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOpti
     return group
 end
 
+function join(groups::Vector{StreamGroup})
+    if (length(groups) < 2)
+        error("can only join two or more StreamGroups")
+    end
+    
+    # join all StreamGroups to StreamGroup 1
+    for i=2:length(groups)
+        for ctxt in groups[i].ctxts
+            # remove connections from old group
+            curl_multi_remove_handle(groups[i].curlm, ctxt.curl)
+
+            # add connections to new group
+            curl_multi_add_handle(groups[1].curlm, ctxt.curl)
+            @ce_curl curl_easy_setopt CURLOPT_SHARE groups[1].share
+            groups[1].curlToCtxt[ctxt.curl] = ctxt
+            push!(groups[1].ctxts, ctxt)
+        end
+        curl_multi_cleanup(groups[i].curlm)
+        curl_share_cleanup(groups[i].share)
+    end
+    
+    return groups[1]
+end
+
+function size(group::StreamGroup)
+    return length(group.ctxts)
+end
+
 function disconnect(group::StreamGroup)
     for ctxt in group.ctxts
         curl_multi_remove_handle(group.curlm, ctxt.curl)
