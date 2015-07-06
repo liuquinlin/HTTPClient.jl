@@ -72,7 +72,7 @@ type ReadData
 end
 
 type StreamData
-    bytes_streamed::Int64
+#    bytes_streamed::Int64
     bytes_read::Int64
     bytes_wanted::Int64
     buff::IOBuffer
@@ -81,11 +81,11 @@ type StreamData
     lastTime::Float64
  
     const MAX_BUFF_SIZE = 16*1024 # 16KiB
-    StreamData() = new(0, 0, 0, IOBuffer(), :NONE, 0, 0)
+    StreamData() = new(0, 0, IOBuffer(), :NONE, 0, 0)
 end
 function show(io::IO, o::StreamData)
-    print(io, "streamed: ", o.bytes_streamed)
-    print(io, ", read: ", o.bytes_read)
+#    print(io, "streamed: ", o.bytes_streamed)
+    print(io, "read: ", o.bytes_read)
     print(io, ", wanted: ", o.bytes_wanted)
     print(io, ", numErrs: ", o.numErrs)
     print(io, ", lastTime: ", o.lastTime)
@@ -176,7 +176,7 @@ function write_cb(buff::Ptr{Uint8}, sz::Csize_t, n::Csize_t, p_ctxt::Ptr{Void})
         write(ctxt.resp.body, buff, nbytes)
     else
         ctxt.stream.buff = IOBuffer()
-        ctxt.stream.bytes_streamed += nbytes
+#        ctxt.stream.bytes_streamed += nbytes
         write(ctxt.stream.buff, buff, nbytes)
     end
     ctxt.resp.bytes_recd += nbytes
@@ -652,6 +652,7 @@ function disconnect(group::StreamGroup)
     for ctxt in group.ctxts
         curl_multi_remove_handle(group.curlm, ctxt.curl)
         cleanup_easy_context(ctxt)
+        ctxt.stream.state = :NONE
     end
     curl_multi_cleanup(group.curlm)
     curl_share_cleanup(group.share)
@@ -675,7 +676,7 @@ function resetContext(group::StreamGroup, ctxt::ConnContext)
 
     setup_curl(ctxt)
     @ce_curl curl_easy_setopt CURLOPT_HTTPGET 1
-    @ce_curl curl_easy_setopt CURLOPT_RANGE "$(ctxt.stream.bytes_streamed)-"
+    @ce_curl curl_easy_setopt CURLOPT_RANGE "$(ctxt.resp.bytes_recd)-"
     @ce_curl curl_easy_setopt CURLOPT_SHARE group.share
     group.curlToCtxt[ctxt.curl] = ctxt
     @ce_curlm curl_multi_add_handle ctxt.curl
@@ -686,6 +687,7 @@ end
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     ctxts = group.ctxts
     numStreams = length(ctxts)
+    @assert numStreams == length(numBytes)
     # each ctxt will return an array of bytes in its Response
     for ctxt in ctxts 
         ctxt.resp.body = Uint8[] 
@@ -697,7 +699,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         r = ctxts[i].resp
         s.bytes_wanted = numBytes[i]
         data = s.buff.data
-        last = (s.bytes_wanted < length(data)) ? s.bytes_wanted : length(data)
+        last = min(s.bytes_wanted, length(data))
         if last > 0
             r.body  = data[1:last]
             s.buff.data = data[last+1:end]
@@ -706,7 +708,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         end
 
         # check for streams that are completely finished (empty)
-        if s.state == :DONE_DOWNLOADING && s.bytes_read == s.bytes_streamed
+        if s.state == :DONE_DOWNLOADING && s.bytes_read == r.bytes_recd
             s.state = :DONE
         end
 
@@ -721,8 +723,14 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     end
 
     # get new data from the connections
+    const MAX_TIMEOUT = 30 * 24 * 3600.0 # one month
     timeout  = ctxts[1].options.timeout
+    timeout  = ( timeout == 0 ? MAX_TIMEOUT : timeout )
     ctimeout = ctxts[1].options.ctimeout
+    ctimeout = ( ctimeout == 0 ? MAX_TIMEOUT : ctimeout )
+    rtimeout = ctxts[1].options.request_timeout
+    rtimeout = ( rtimeout == 0 ? MAX_TIMEOUT : rtimeout )
+    
     max_errs = ctxts[1].options.max_errs
     while numDone < numStreams
         oldRunning = group.running[1]
@@ -765,7 +773,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 continue
             end
             data = s.buff.data
-            last = s.bytes_wanted < length(data) ? s.bytes_wanted : length(data)
+            last = min(s.bytes_wanted, length(data))
             if last > 0
                 if s.state == :CONNECTED
                     s.state = :DOWNLOADING
@@ -778,7 +786,9 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
             elseif s.bytes_wanted > 0
                 # check for timeouts
                 timeElap = time() - s.lastTime
-
+                if (timeElap > rtimeout)
+                    error("request timed out")
+                end
                 if (s.state == :DOWNLOADING && timeElap > timeout) || (s.state == :CONNECTED && timeElap > ctimeout)
                     s.numErrs += 1
                     if (s.numErrs > max_errs)
@@ -800,7 +810,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
             end
 
             # check for streams that are completely finished (empty)
-            if s.state == :DONE_DOWNLOADING && s.bytes_read == s.bytes_streamed
+            if s.state == :DONE_DOWNLOADING && s.bytes_read == r.bytes_recd
                 s.state = :DONE
             end
         end # for
