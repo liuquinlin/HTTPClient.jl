@@ -119,19 +119,6 @@ function show(io::IO, o::ConnContext)
     println(io, o.stream)
 end
 
-#= type GroupOpts
-    max_errs::Int64
-    timeout::Float64
-    ctimeout::Float64
-
-    GroupOpts(max_errs, timeout, ctimeout) = new(max_errs, timeout, ctimeout)
-end
-function show(io::IO, o::GroupOpts)
-    print(io, "max errs: ", o.max_errs)
-    print(io, ", timeout: ", o.timeout)
-    println(io, ", connect timeout: ", o.ctimeout)
-end =#
-
 type StreamGroup
     ctxts::Vector{ConnContext}
     curlm::Ptr{CURL}
@@ -655,17 +642,19 @@ function join(groups::Vector{StreamGroup})
     end
     
     # join all StreamGroups to StreamGroup 1
+    curlm = groups[1].curlm
     for i=2:length(groups)
         for ctxt in groups[i].ctxts
             # remove connections from old group
             curl_multi_remove_handle(groups[i].curlm, ctxt.curl)
 
             # add connections to new group
-            curl_multi_add_handle(groups[1].curlm, ctxt.curl)
             @ce_curl curl_easy_setopt CURLOPT_SHARE groups[1].share
+            @ce_curlm curl_multi_add_handle ctxt.curl
             groups[1].curlToCtxt[ctxt.curl] = ctxt
             push!(groups[1].ctxts, ctxt)
         end
+        # cleanup group
         curl_multi_cleanup(groups[i].curlm)
         curl_share_cleanup(groups[i].share)
     end
@@ -697,13 +686,20 @@ function getbytes(group::StreamGroup, numBytes::Int64)
 end
 
 # helper function to reset a handle that had an error / is taking too long
-function resetContext(group::StreamGroup, ctxt::ConnContext)
-    delete!(group.curlToCtxt, ctxt.curl)
+function resetStream(group::StreamGroup, ctxt::ConnContext, msg::String)
+    ctxt.stream.numErrs += 1
+    if (ctxt.stream.numErrs > ctxt.options.max_errs)
+        error("too many errors, aborting")
+    end
 
+    println(msg)
+
+    # remove old curl easy handle
     curlm = group.curlm
+    delete!(group.curlToCtxt, ctxt.curl)
     curl_multi_remove_handle(curlm, ctxt.curl)
     curl_easy_cleanup(ctxt.curl)
-
+    # add new curl easy handle
     setup_curl(ctxt)
     @ce_curl curl_easy_setopt CURLOPT_HTTPGET 1
     @ce_curl curl_easy_setopt CURLOPT_RANGE "$(ctxt.resp.bytes_recd)-"
@@ -712,16 +708,6 @@ function resetContext(group::StreamGroup, ctxt::ConnContext)
     @ce_curlm curl_multi_add_handle ctxt.curl
     ctxt.stream.lastTime = time()
     ctxt.stream.state    = :CONNECTED
-end
-
-# helper function for reporting errors / choosing to reset a stream
-function streamError(group::StreamGroup, ctxt::ConnContext, max_errs::Int64, msg::String)
-    ctxt.stream.numErrs += 1
-    if (ctxt.stream.numErrs > max_errs)
-        error("too many errors, aborting")
-    end
-    println(msg)
-    resetContext(group, ctxt)
 end
 
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
@@ -737,8 +723,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     # read from each stream's local buffer
     numDone = 0
     for i=1:numStreams
-        s = ctxts[i].stream
-        r = ctxts[i].resp
+        s, r = ctxts[i].stream, ctxts[i].resp
         s.bytes_wanted = numBytes[i]
         data = s.buff.data
         last = min(s.bytes_wanted, length(data))
@@ -758,13 +743,11 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         if s.bytes_wanted > 0 && s.state != :DONE
             curl_easy_pause(ctxts[i].curl, CURLPAUSE_CONT)
             s.lastTime = time()
-        # count number of connections that don't need more bytes
         else
             numDone += 1
         end
     end
 
-    # get new data from the connections
     const MAX_TIMEOUT = 30 * 24 * 3600.0 # one month
     timeout  = ctxts[1].options.timeout
     timeout  = ( timeout == 0  ? MAX_TIMEOUT : timeout  )
@@ -772,8 +755,8 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     ctimeout = ( ctimeout == 0 ? MAX_TIMEOUT : ctimeout )
     rtimeout = ctxts[1].options.request_timeout
     rtimeout = ( rtimeout == 0 ? MAX_TIMEOUT : rtimeout )
-    max_errs = ctxts[1].options.max_errs
-    
+
+    # get new data from the connections    
     while numDone < numStreams
         oldRunning = group.running[1]
         curlmcode = curl_multi_perform(group.curlm, group.running)
@@ -782,7 +765,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         end
 
         # check for finished transfers / handle errors
-        if (oldRunning > group.running[1])
+        if (group.running[1] < oldRunning)
             while (p_msg::Ptr{CURLMsgResult} = curl_multi_info_read(group.curlm, Cint[0])) != C_NULL
                 msg = unsafe_load(p_msg)
                 curl = msg.easy_handle
@@ -791,9 +774,9 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                     ctxt = group.curlToCtxt[curl]
                     s = ctxt.stream
                     if (curlcode == CURLE_RECV_ERROR)
-                        streamError(group, ctxt, max_errs, "recv error, retrying")
+                        resetStream(group, ctxt, "recv error, retrying")
                     elseif (curlcode == CURLE_COULDNT_CONNECT)
-                        streamError(group, ctxt, max_errs, "couldn't connect, retrying")
+                        resetStream(group, ctxt, "couldn't connect, retrying")
                     elseif (curlcode != CURLE_OK)
                         error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
                     else
@@ -806,9 +789,8 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         # read any new information from the local buffer
         numDone = 0
         for i=1:numStreams
-            s = ctxts[i].stream
-            r = ctxts[i].resp
-            if s.state == :DONE # don't bother with finished ones
+            s, r = ctxts[i].stream, ctxts[i].resp
+            if s.state == :DONE
                 numDone += 1
                 continue
             end
@@ -829,9 +811,9 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 if (timeElap > rtimeout)
                     error("request timed out")
                 elseif (s.state == :DOWNLOADING && timeElap > timeout) 
-                    streamError(group, ctxts[i], max_errs, "timed out while streaming: $(timeElap)")
+                    resetStream(group, ctxts[i], "timed out while streaming: $(timeElap)")
                 elseif (s.state == :CONNECTED && timeElap > ctimeout)
-                    streamError(group, ctxts[i], max_errs, "timed out while connecting: $(timeElap)")
+                    resetStream(group, ctxts[i], "timed out while connecting: $(timeElap)")
                 end
             end
 
@@ -994,6 +976,4 @@ function exec_as_multi(ctxt)
     ctxt.resp
 end
 
-println("If this prints, you're using the right version of HTTPClient.jl")
-
-end
+end # module
