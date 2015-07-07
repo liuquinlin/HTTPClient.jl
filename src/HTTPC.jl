@@ -176,7 +176,6 @@ function write_cb(buff::Ptr{Uint8}, sz::Csize_t, n::Csize_t, p_ctxt::Ptr{Void})
         write(ctxt.resp.body, buff, nbytes)
     else
         ctxt.stream.buff = IOBuffer()
-#        ctxt.stream.bytes_streamed += nbytes
         write(ctxt.stream.buff, buff, nbytes)
     end
     ctxt.resp.bytes_recd += nbytes
@@ -349,6 +348,8 @@ function setup_curl(ctxt::ConnContext)
     @ce_curl curl_easy_setopt CURLOPT_HEADERDATA p_ctxt
 
     @ce_curl curl_easy_setopt CURLOPT_HTTPHEADER ctxt.slist
+#    @ce_curl curl_easy_setopt CURLOPT_FORBID_REUSE 1
+#    @ce_curl curl_easy_setopt CURLOPT_VERBOSE 1
 end
 
 function setup_easy_handle(url, options::RequestOptions)
@@ -753,7 +754,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     # get new data from the connections
     const MAX_TIMEOUT = 30 * 24 * 3600.0 # one month
     timeout  = ctxts[1].options.timeout
-    timeout  = ( timeout == 0 ? MAX_TIMEOUT : timeout )
+    timeout  = ( timeout == 0  ? MAX_TIMEOUT : timeout  )
     ctimeout = ctxts[1].options.ctimeout
     ctimeout = ( ctimeout == 0 ? MAX_TIMEOUT : ctimeout )
     rtimeout = ctxts[1].options.request_timeout

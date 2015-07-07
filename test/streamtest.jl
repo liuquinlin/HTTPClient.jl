@@ -81,6 +81,32 @@ function test_stream_many_files(urls::Vector{ASCIIString}, chunkSize::Vector{Int
     println("time elapsed: $(finishTime - startTime)")
 end
 
+function test_join(urls::Vector{ASCIIString}, chunkSize::Vector{Int64})
+    options = RequestOptions(timeout=3, ctimeout=30)
+    conns = StreamGroup[]
+    for i=1:length(urls)
+        push!(conns, HTTPC.connect(urls[i], options))
+    end
+
+    startTime = time()
+    s = HTTPC.join(conns)
+    while !HTTPC.isDone(s)
+        resps = HTTPC.getbytes(s, chunkSize)
+        httpCodesAreOK = true
+        for i=1:length(resps)
+            if !(resps[i].http_code == 200 || resps[i].http_code == 206)
+                httpCodesAreOK = false
+                break
+            end
+        end
+        @test httpCodesAreOK
+    end
+    finishTime = time()
+
+    HTTPC.disconnect(s)
+    println("time elapsed: $(finishTime - startTime)")
+end
+
 function run_tests()
     println("--- CONNECTION TESTS ---")
     test_connect()
@@ -121,6 +147,9 @@ function run_tests()
     urls = [ "davis-test.s3.amazonaws.com/bigtest.txt" for _=1:2048 ]
     chunkSize = [ 8*1024 for _=1:2048 ]
     test_stream_many_files(urls, chunkSize, sameFile=true)
+
+    println("--- STREAM 2048 BIG FILES WITH JOIN ---")
+    test_join(urls, chunkSize)
 
     println("--- TESTS DONE ---")
 end
