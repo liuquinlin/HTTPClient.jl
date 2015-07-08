@@ -335,7 +335,7 @@ function setup_curl(ctxt::ConnContext)
     @ce_curl curl_easy_setopt CURLOPT_HEADERDATA p_ctxt
 
     @ce_curl curl_easy_setopt CURLOPT_HTTPHEADER ctxt.slist
-#    @ce_curl curl_easy_setopt CURLOPT_FORBID_REUSE 1
+    @ce_curl curl_easy_setopt CURLOPT_FORBID_REUSE 1
 #    @ce_curl curl_easy_setopt CURLOPT_VERBOSE 1
 end
 
@@ -773,15 +773,17 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                     curlcode = msg.result
                     ctxt = group.curlToCtxt[curl]
                     s = ctxt.stream
-                    if (curlcode == CURLE_RECV_ERROR)
+                    if (curlcode == CURLE_OK)
+                        s.state = :DONE_DOWNLOADING
+                    elseif (curlcode == CURLE_RECV_ERROR)
                         resetStream(group, ctxt, "recv error, retrying")
                     elseif (curlcode == CURLE_COULDNT_CONNECT)
 #                        gc() # try to free up some RAM
                         resetStream(group, ctxt, "couldn't connect, retrying")
-                    elseif (curlcode != CURLE_OK)
-                        error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
+                    elseif (curlcode == CURLE_SSL_CONNECT_ERROR)
+                        resetStream(group, ctxt, "ssl connect error, retrying")
                     else
-                        s.state = :DONE_DOWNLOADING
+                        error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
                     end
                 end
             end
@@ -792,6 +794,12 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
         timeNow = time()
         for i=1:numStreams
             s, r = ctxts[i].stream, ctxts[i].resp
+
+            # check for streams that are completely finished (empty)
+            if s.state == :DONE_DOWNLOADING && s.bytes_read == r.bytes_recd
+                s.state = :DONE
+            end
+            # skip finished streams
             if s.state == :DONE
                 numDone += 1
                 continue
@@ -823,11 +831,6 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
             if s.bytes_wanted == 0
                 curl_easy_pause(ctxts[i].curl, CURLPAUSE_ALL)
                 numDone += 1
-            end
-
-            # check for streams that are completely finished (empty)
-            if s.state == :DONE_DOWNLOADING && s.bytes_read == r.bytes_recd
-                s.state = :DONE
             end
         end # for
         sleep(.005)
