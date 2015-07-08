@@ -776,6 +776,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                     if (curlcode == CURLE_RECV_ERROR)
                         resetStream(group, ctxt, "recv error, retrying")
                     elseif (curlcode == CURLE_COULDNT_CONNECT)
+#                        gc() # try to free up some RAM
                         resetStream(group, ctxt, "couldn't connect, retrying")
                     elseif (curlcode != CURLE_OK)
                         error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
@@ -788,6 +789,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
 
         # read any new information from the local buffer
         numDone = 0
+        timeNow = time()
         for i=1:numStreams
             s, r = ctxts[i].stream, ctxts[i].resp
             if s.state == :DONE
@@ -807,7 +809,7 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 s.lastTime = time()
             elseif s.bytes_wanted > 0
                 # check for timeouts
-                timeElap = time() - s.lastTime
+                timeElap = timeNow - s.lastTime
                 if (timeElap > rtimeout)
                     error("request timed out")
                 elseif (s.state == :DOWNLOADING && timeElap > timeout) 

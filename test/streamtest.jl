@@ -87,6 +87,7 @@ function test_join(urls::Vector{ASCIIString}, chunkSize::Vector{Int64})
     for i=1:length(urls)
         push!(conns, HTTPC.connect(urls[i], options))
     end
+    conns = nothing[]
 
     startTime = time()
     s = HTTPC.join(conns)
@@ -155,32 +156,3 @@ function run_tests()
 end
 
 HelperTest.run_test(run_tests)
-
-#=
-println("Testing...")
-urls = ASCIIString[]
-const NUM_FILES  = 2048
-const CHUNK_SIZE = 8*1024 # 8 KiB
-const URL = "davis-test.s3.amazonaws.com/bigtest.txt"
-for i=1:NUM_FILES
-    push!(urls, URL)
-end
-ro = RequestOptions(timeout=3, ctimeout=30)
-s = HTTPC.connect(urls, ro)
-f = open("output.txt", "w")
-
-tic()
-try
-    while !HTTPC.isDone(s)
-        resp = HTTPC.getbytes(s, CHUNK_SIZE)
-        for r in resp
-            write(f, r.body)
-        end
-        println("read $(CHUNK_SIZE) bytes")
-    end
-finally
-    HTTPC.disconnect(s)
-    close(f)
-end
-toc()
-=#
