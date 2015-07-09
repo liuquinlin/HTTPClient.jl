@@ -676,11 +676,6 @@ function disconnect(group::StreamGroup)
     curl_share_cleanup(group.share)
 end
 
-function getbytes(group::StreamGroup, numBytes::Int64)
-    numCtxts = length(group.ctxts)
-    return getbytes(group, [numBytes for _=1:numCtxts])
-end
-
 # helper function to reset a handle that had an error / is taking too long
 function resetStream(group::StreamGroup, ctxt::ConnContext, msg::String)
     ctxt.stream.numErrs += 1
@@ -706,10 +701,28 @@ function resetStream(group::StreamGroup, ctxt::ConnContext, msg::String)
     ctxt.stream.state    = :CONNECTED
 end
 
+function getbytes(group::StreamGroup, results::Array)
+    # make sure the array is the right size
+    @assert ndims(results) == 2
+    @assert length(results[:,1]) == size(group) 
+    exec_getbytes(group, nothing, results)
+end
+
+function getbytes(group::StreamGroup, numBytes::Int64)
+    return exec_getbytes(group, [numBytes for _=1:size(group)], nothing)
+end
+
 function getbytes(group::StreamGroup, numBytes::Vector{Int64})
+    # make sure the numBytes vector is the right size
+    @assert length(numBytes) == size(group)
+    return exec_getbytes(group, numBytes, nothing)
+end
+
+function exec_getbytes(group::StreamGroup, numBytes::Union{Vector{Int64},Nothing}, results::Union{Array,Nothing})
     ctxts = group.ctxts
     numStreams = length(ctxts)
-    @assert numStreams == length(numBytes)
+    # specify the "mode", either filling the given results array or storing in ctxt.resp.body
+    fillArray = ( results != nothing )
 
     # each ctxt will return an array of bytes in its Response
     for ctxt in ctxts 
@@ -719,12 +732,17 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
     # read from each stream's local buffer
     numDone = 0
     for i=1:numStreams
-        s, r = ctxts[i].stream, ctxts[i].resp
-        s.bytes_wanted = numBytes[i]
+        s = ctxts[i].stream
+        r = ctxts[i].resp
+        s.bytes_wanted = fillArray ? length(results[i,:]) : numBytes[i]
         data = s.buff.data
         last = min(s.bytes_wanted, length(data))
         if last > 0
-            r.body  = data[1:last]
+            if fillArray
+                results[i,1:last] = data[1:last]
+            else
+                r.body = data[1:last]
+            end
             s.buff.data = data[last+1:end]
             s.bytes_wanted -= last
             s.bytes_read   += last
@@ -805,7 +823,12 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 if s.state == :CONNECTED
                     s.state = :DOWNLOADING
                 end
-                r.body = [ r.body ; data[1:last] ]
+                if fillArray
+                    start = length(results[1,:])-s.bytes_wanted+1 # bytes read in this iteration of getbytes
+                    results[i,start:start+last-1] = data[1:last]
+                else
+                    r.body = [ r.body ; data[1:last] ]
+                end
                 s.buff.data = data[last+1:end]
                 s.bytes_wanted -= last
                 s.bytes_read   += last
