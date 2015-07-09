@@ -4,7 +4,7 @@ using Compat
 using LibCURL
 using LibCURL.Mime_ext
 
-import Base.convert, Base.show, Base.get, Base.trace
+import Base.convert, Base.show, Base.get, Base.trace, Base.join
 
 export init, cleanup, get, put, post, trace, delete, head, options
 export connect, disconnect, getbytes, isDone
@@ -102,8 +102,9 @@ type ConnContext
     options::RequestOptions
     close_ostream::Bool
     stream::StreamData
+    err_buff::Vector{Cchar}
 
-    ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, StreamData())
+    ConnContext(options::RequestOptions) = new(C_NULL, "", C_NULL, ReadData(), Response(), options, false, StreamData(), zeros(Cchar, CURL_ERROR_SIZE))
 end
 function show(io::IO, o::ConnContext)
     print(io, "URL : ", o.url)
@@ -337,6 +338,8 @@ function setup_curl(ctxt::ConnContext)
 
     @ce_curl curl_easy_setopt CURLOPT_HTTPHEADER ctxt.slist
     @ce_curl curl_easy_setopt CURLOPT_FORBID_REUSE 1
+
+    @ce_curl curl_easy_setopt CURLOPT_ERRORBUFFER ctxt.err_buff
 #    @ce_curl curl_easy_setopt CURLOPT_VERBOSE 1
 end
 
@@ -656,7 +659,9 @@ function join(groups::Vector{StreamGroup})
         end
         # cleanup group
         curl_multi_cleanup(groups[i].curlm)
+        groups[i].curlm = C_NULL
         curl_share_cleanup(groups[i].share)
+        groups[i].share = C_NULL
     end
     
     return groups[1]
@@ -673,7 +678,10 @@ function disconnect(group::StreamGroup)
         ctxt.stream.state = :NONE
     end
     curl_multi_cleanup(group.curlm)
+    group.curlm = C_NULL
     curl_share_cleanup(group.share)
+    group.share = C_NULL
+    group.ctxts = []
 end
 
 # helper function to reset a handle that had an error / is taking too long
@@ -719,6 +727,8 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
 end
 
 function exec_getbytes(group::StreamGroup, numBytes::Union{Vector{Int64},Nothing}, results::Union{Array,Nothing})
+    @assert size(group) > 0 # make sure there's something to stream
+    
     ctxts = group.ctxts
     numStreams = length(ctxts)
     # specify the "mode", either filling the given results array or storing in ctxt.resp.body
@@ -788,14 +798,15 @@ function exec_getbytes(group::StreamGroup, numBytes::Union{Vector{Int64},Nothing
                     ctxt = group.curlToCtxt[curl]
                     if (curlcode == CURLE_OK)
                         ctxt.stream.state = :DONE_DOWNLOADING
-                    elseif (curlcode == CURLE_RECV_ERROR)
-                        resetStream(group, ctxt, "recv error, retrying")
-                    elseif (curlcode == CURLE_COULDNT_CONNECT)
-                        resetStream(group, ctxt, "couldn't connect, retrying")
-                    elseif (curlcode == CURLE_SSL_CONNECT_ERROR)
-                        resetStream(group, ctxt, "ssl connect error, retrying")
-                    else
-                        error("CURLMsg error: " * bytestring(curl_easy_strerror(curlcode)))
+                    else # error occured; try resetting if not fatal
+                        errString = "CURLMsg error (#$(curlcode)): " * bytestring(curl_easy_strerror(curlcode))
+                        errDetail = "more detailed error info: " * join(convert(Vector{Char}, ctxt.err_buff))
+                        if (curlcode == CURLE_RECV_ERROR || curlcode == CURLE_COULDNT_CONNECT || curlcode == CURLE_SSL_CONNECT_ERROR)
+                            resetStream(group, ctxt, errString * "; resetting stream and trying again\n" * errDetail)
+                        else
+                            errString = bytestring(curl_easy_strerror(curlcode))
+                            error(errString * "\n" * errDetail)
+                        end
                     end
                 end
             end
