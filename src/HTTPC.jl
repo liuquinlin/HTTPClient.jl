@@ -162,6 +162,7 @@ function write_cb(buff::Ptr{Uint8}, sz::Csize_t, n::Csize_t, p_ctxt::Ptr{Void})
     if (ctxt.stream.state == :NONE)
         write(ctxt.resp.body, buff, nbytes)
     else
+        close(ctxt.stream.buff)
         ctxt.stream.buff = IOBuffer()
         write(ctxt.stream.buff, buff, nbytes)
     end
@@ -632,7 +633,6 @@ function connect{T<:String}(urls::Vector{T}, options::RequestOptions=RequestOpti
         group.curlToCtxt[ctxt.curl] = ctxt
     end
 
-
     return group
 end
 
@@ -674,10 +674,6 @@ function disconnect(group::StreamGroup)
     end
     curl_multi_cleanup(group.curlm)
     curl_share_cleanup(group.share)
-end
-
-function get(group::StreamGroup)
-    error("this method is currently unsupported")
 end
 
 function getbytes(group::StreamGroup, numBytes::Int64)
@@ -772,13 +768,11 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 if msg.msg == CURLMSG_DONE
                     curlcode = msg.result
                     ctxt = group.curlToCtxt[curl]
-                    s = ctxt.stream
                     if (curlcode == CURLE_OK)
-                        s.state = :DONE_DOWNLOADING
+                        ctxt.stream.state = :DONE_DOWNLOADING
                     elseif (curlcode == CURLE_RECV_ERROR)
                         resetStream(group, ctxt, "recv error, retrying")
                     elseif (curlcode == CURLE_COULDNT_CONNECT)
-#                        gc() # try to free up some RAM
                         resetStream(group, ctxt, "couldn't connect, retrying")
                     elseif (curlcode == CURLE_SSL_CONNECT_ERROR)
                         resetStream(group, ctxt, "ssl connect error, retrying")
@@ -800,13 +794,14 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 s.state = :DONE
             end
             # skip finished streams
-            if s.state == :DONE
+            if s.state == :DONE || s.bytes_wanted == 0
                 numDone += 1
                 continue
             end
+
             data = s.buff.data
             last = min(s.bytes_wanted, length(data))
-            if last > 0
+            if last > 0 # got data to read
                 if s.state == :CONNECTED
                     s.state = :DOWNLOADING
                 end
@@ -815,8 +810,11 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 s.bytes_wanted -= last
                 s.bytes_read   += last
                 s.lastTime = time()
-            elseif s.bytes_wanted > 0
-                # check for timeouts
+                # pause transfers if we don't need more bytes right now
+                if s.bytes_wanted == 0
+                    curl_easy_pause(ctxts[i].curl, CURLPAUSE_ALL)
+                end
+            else # check for timeouts
                 timeElap = timeNow - s.lastTime
                 if (timeElap > rtimeout)
                     error("request timed out")
@@ -825,12 +823,6 @@ function getbytes(group::StreamGroup, numBytes::Vector{Int64})
                 elseif (s.state == :CONNECTED && timeElap > ctimeout)
                     resetStream(group, ctxts[i], "timed out while connecting: $(timeElap)")
                 end
-            end
-
-            # pause transfers if we don't need more bytes right now
-            if s.bytes_wanted == 0
-                curl_easy_pause(ctxts[i].curl, CURLPAUSE_ALL)
-                numDone += 1
             end
         end # for
         sleep(.005)
