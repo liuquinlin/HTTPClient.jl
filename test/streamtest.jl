@@ -10,11 +10,6 @@ function test_connect()
         @test s.ctxts[i].url == urls[i]
         @test s.ctxts[i].stream.state == :CONNECTED
     end
-
-    HTTPC.disconnect(s)
-    for i=1:length(urls)
-        @test s.ctxts[i].stream.state == :NONE
-    end
 end
 
 function test_stream_one_file(url::ASCIIString, chunkSize::Int64)
@@ -87,7 +82,7 @@ function test_join(urls::Vector{ASCIIString}, chunkSize::Vector{Int64})
     for i=1:length(urls)
         push!(conns, HTTPC.connect(urls[i], options))
     end
-    conns = nothing[]
+    conns = nothing
 
     startTime = time()
     s = HTTPC.join(conns)
